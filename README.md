@@ -40,6 +40,10 @@ git clone https://github.com/Jinwoong-Hwang/lookout ~/lookout && cd ~/lookout &&
    **내 PR** → 🏁 완료·머지대기 (self-approve 불가라 게이트 없이 통과 표시)
 5. PR 머지/닫히면 → 카드 자동 정리
 
+`auto_review: false` 저장소에서 수동 시작 없이 Triage에 머문 카드는 현재 head 생성 후
+7일까지만 root 상태를 주기적으로 조회합니다. 이후에도 Triage 카드는 남아 있으며,
+사람이 리뷰를 시작하면 root monitoring이 자동으로 다시 활성화됩니다.
+
 | 동작 | 방법 |
 |---|---|
 | 새 PR 즉시 가져오기 | 🔄 PR 가져오기 |

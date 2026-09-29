@@ -167,6 +167,7 @@ def do_action(action, card_id, engine="claude"):
                 return False
             db.set_engine(c, card["id"], engine)
             db.set_status(c, card["id"], "intake")
+            router.reactivate_root_monitoring(c, card)
             db.log_event(c, "operator_start", card["key"], {"engine": engine})
             kick = True
         elif action == "ignore":

@@ -170,6 +170,8 @@ def _monitor_roots():
     for card in roots:
         try:
             with db.connect() as c:
+                if monitor.expire_manual_review_root(c, card):
+                    continue
                 monitor.process_root(c, card)
         except Exception:  # noqa: BLE001
             with db.connect() as c:

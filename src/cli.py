@@ -15,7 +15,7 @@
 import json
 import sys
 
-from . import commenter, db, feedback, tick
+from . import commenter, db, feedback, router, tick
 
 
 def _fmt_ts(ts):
@@ -80,6 +80,7 @@ def cmd_start(card_id, engine="claude"):
             return
         db.set_engine(c, card["id"], engine)
         db.set_status(c, card["id"], "intake")
+        router.reactivate_root_monitoring(c, card)
         db.log_event(c, "operator_start", card["key"], {"engine": engine})
         print(f"started review on #{card_id} with {engine}; runs on next tick")
 

@@ -4,7 +4,40 @@ Head-change re-review is primarily driven by webhooks/poller (which create a new
 review card for the new head). Monitor is the deterministic fallback + cleanup:
 closed/merged PRs are archived, stale commented cards are superseded.
 """
-from . import db, feedback, ghclient
+from . import db, feedback, ghclient, profiles
+
+
+MANUAL_ROOT_MONITOR_DAYS = 7
+
+
+def expire_manual_review_root(c, card, now=None, days=MANUAL_ROOT_MONITOR_DAYS):
+    """Stop polling an untouched manual-review root after its current head aged out."""
+    if profiles.policy_for_repo(card["repo"]).get("auto_review") is not False:
+        return False
+    now = db.now() if now is None else now
+    active = c.execute(
+        """SELECT 1 FROM cards
+           WHERE repo=? AND pr_number=? AND head_sha=?
+             AND kind IN ('review','approve') AND status NOT IN ('triage','archived')
+           LIMIT 1""",
+        (card["repo"], card["pr_number"], card["head_sha"]),
+    ).fetchone()
+    if active:
+        return False
+    review = c.execute(
+        """SELECT created_at FROM cards
+           WHERE repo=? AND pr_number=? AND head_sha=?
+             AND kind='review' AND status='triage'
+           ORDER BY created_at DESC LIMIT 1""",
+        (card["repo"], card["pr_number"], card["head_sha"]),
+    ).fetchone()
+    started_at = review["created_at"] if review else card["created_at"]
+    if now - started_at < days * 86400:
+        return False
+    db.set_status(c, card["id"], "archived")
+    db.log_event(c, "root_monitoring_expired", card["key"],
+                 {"days": days, "head": card["head_sha"]})
+    return True
 
 
 def process_root(c, card):

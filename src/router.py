@@ -36,6 +36,23 @@ def _initial_status(repo: str, login: str) -> str:
     return "intake" if AUTO_REVIEW_ALL or login in AUTO_REVIEW_AUTHORS else "triage"
 
 
+def reactivate_root_monitoring(c, review_card) -> bool:
+    """Resume the head-independent root when a human starts an expired manual review."""
+    rkey = keys.root_key(review_card["repo"], review_card["pr_number"])
+    root = db.get_card(c, rkey)
+    if not root:
+        return False
+    if root["status"] == "monitoring" and root["head_sha"] == review_card["head_sha"]:
+        return False
+    c.execute(
+        "UPDATE cards SET status='monitoring', head_sha=?, updated_at=? WHERE id=?",
+        (review_card["head_sha"], db.now(), root["id"]),
+    )
+    db.log_event(c, "root_monitoring_reactivated", rkey,
+                 {"head": review_card["head_sha"], "review": review_card["key"]})
+    return True
+
+
 def ensure_pr_cards(c, repo: str, pr: int, source: str = "webhook"):
     """Idempotently ensure root + current-head review cards for a PR."""
     info = ghclient.pr_view(repo, pr)
