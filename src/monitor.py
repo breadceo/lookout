@@ -7,7 +7,7 @@ closed/merged PRs are archived, stale commented cards are superseded.
 from . import db, feedback, ghclient, profiles
 
 
-MANUAL_ROOT_MONITOR_DAYS = 7
+MANUAL_ROOT_MONITOR_DAYS = 3
 
 
 def expire_manual_review_root(c, card, now=None, days=MANUAL_ROOT_MONITOR_DAYS):

@@ -14,6 +14,29 @@ class ManualRootDeadlineTest(unittest.TestCase):
     def tearDown(self):
         self.c.close()
 
+    def test_default_deadline_is_three_days(self):
+        self.c.execute(
+            """INSERT INTO cards(key,kind,repo,pr_number,head_sha,status,created_at,updated_at)
+               VALUES ('root','root','owner/manual',1,'head','monitoring',0,0)"""
+        )
+        self.c.execute(
+            """INSERT INTO cards(key,kind,repo,pr_number,head_sha,status,created_at,updated_at)
+               VALUES ('review','review','owner/manual',1,'head','triage',0,0)"""
+        )
+        root = self.c.execute("SELECT * FROM cards WHERE key='root'").fetchone()
+        old_policy = profiles.policy_for_repo
+        try:
+            profiles.policy_for_repo = lambda _repo: {"auto_review": False}
+            expired = monitor.expire_manual_review_root(self.c, root, now=4 * 86400)
+        finally:
+            profiles.policy_for_repo = old_policy
+
+        self.assertTrue(expired)
+        event = self.c.execute(
+            "SELECT detail FROM events WHERE type='root_monitoring_expired'"
+        ).fetchone()
+        self.assertIn('"days": 3', event["detail"])
+
     def test_old_manual_triage_root_expires_without_archiving_review(self):
         now = 10 * 86400
         self.c.execute(
