@@ -184,6 +184,87 @@ class ManualRootDeadlineTest(unittest.TestCase):
             "monitoring",
         )
 
+    def test_expiry_cas_does_not_archive_root_when_manual_start_wins_race(self):
+        self.c.execute(
+            """INSERT INTO cards(key,kind,repo,pr_number,head_sha,status,created_at,updated_at)
+               VALUES ('pr-auto-review:owner/manual#1','root','owner/manual',1,'head','monitoring',0,0)"""
+        )
+        self.c.execute(
+            """INSERT INTO cards(key,kind,repo,pr_number,head_sha,status,created_at,updated_at)
+               VALUES ('review','review','owner/manual',1,'head','triage',0,0)"""
+        )
+        root = self.c.execute(
+            "SELECT * FROM cards WHERE key='pr-auto-review:owner/manual#1'"
+        ).fetchone()
+        review = self.c.execute("SELECT * FROM cards WHERE key='review'").fetchone()
+        real = self.c
+
+        class StartBeforeArchive:
+            fired = False
+
+            def execute(proxy, sql, params=()):
+                normalized = " ".join(sql.split())
+                archiving = (
+                    normalized.startswith("UPDATE cards")
+                    and ("status='archived'" in normalized or (params and params[0] == "archived"))
+                )
+                if not proxy.fired and archiving:
+                    proxy.fired = True
+                    db.set_status(real, review["id"], "intake")
+                    router.reactivate_root_monitoring(real, review)
+                    db.log_event(real, "operator_start", review["key"], {"engine": "codex"})
+                return real.execute(sql, params)
+
+            def __getattr__(proxy, name):
+                return getattr(real, name)
+
+        old_policy = profiles.policy_for_repo
+        try:
+            profiles.policy_for_repo = lambda _repo: {"auto_review": False}
+            expired = monitor.expire_manual_review_root(
+                StartBeforeArchive(), root, now=10 * 86400, days=7
+            )
+        finally:
+            profiles.policy_for_repo = old_policy
+
+        self.assertFalse(expired)
+        self.assertEqual(
+            self.c.execute("SELECT status FROM cards WHERE key='review'").fetchone()["status"],
+            "intake",
+        )
+        self.assertEqual(
+            self.c.execute(
+                "SELECT status FROM cards WHERE key='pr-auto-review:owner/manual#1'"
+            ).fetchone()["status"],
+            "monitoring",
+        )
+
+    def test_quota_requeued_started_review_does_not_expire(self):
+        self.c.execute(
+            """INSERT INTO cards(key,kind,repo,pr_number,head_sha,status,created_at,updated_at)
+               VALUES ('root','root','owner/manual',1,'head','monitoring',0,0)"""
+        )
+        self.c.execute(
+            """INSERT INTO cards(key,kind,repo,pr_number,head_sha,status,created_at,updated_at)
+               VALUES ('review','review','owner/manual',1,'head','triage',0,0)"""
+        )
+        db.log_event(self.c, "operator_start", "review", {"engine": "codex"})
+        root = self.c.execute("SELECT * FROM cards WHERE key='root'").fetchone()
+        old_policy = profiles.policy_for_repo
+        try:
+            profiles.policy_for_repo = lambda _repo: {"auto_review": False}
+            expired = monitor.expire_manual_review_root(
+                self.c, root, now=10 * 86400, days=7
+            )
+        finally:
+            profiles.policy_for_repo = old_policy
+
+        self.assertFalse(expired)
+        self.assertEqual(
+            self.c.execute("SELECT status FROM cards WHERE key='root'").fetchone()["status"],
+            "monitoring",
+        )
+
     def test_tick_skips_github_check_after_manual_root_expires(self):
         self.c.execute(
             """INSERT INTO cards(key,kind,repo,pr_number,head_sha,status,created_at,updated_at)

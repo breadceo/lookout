@@ -15,26 +15,34 @@ def expire_manual_review_root(c, card, now=None, days=MANUAL_ROOT_MONITOR_DAYS):
     if profiles.policy_for_repo(card["repo"]).get("auto_review") is not False:
         return False
     now = db.now() if now is None else now
-    active = c.execute(
-        """SELECT 1 FROM cards
-           WHERE repo=? AND pr_number=? AND head_sha=?
-             AND kind IN ('review','approve') AND status NOT IN ('triage','archived')
-           LIMIT 1""",
-        (card["repo"], card["pr_number"], card["head_sha"]),
-    ).fetchone()
-    if active:
+    cutoff = now - days * 86400
+    result = c.execute(
+        """UPDATE cards AS root
+           SET status='archived', updated_at=?
+           WHERE root.id=? AND root.status='monitoring'
+             AND COALESCE(
+                   (SELECT MAX(review.created_at) FROM cards AS review
+                    WHERE review.repo=root.repo AND review.pr_number=root.pr_number
+                      AND review.head_sha=root.head_sha AND review.kind='review'
+                      AND review.status='triage'),
+                   root.created_at
+                 ) <= ?
+             AND NOT EXISTS (
+                   SELECT 1 FROM cards AS active
+                   WHERE active.repo=root.repo AND active.pr_number=root.pr_number
+                     AND active.head_sha=root.head_sha
+                     AND active.kind IN ('review','approve')
+                     AND active.status NOT IN ('triage','archived'))
+             AND NOT EXISTS (
+                   SELECT 1 FROM events AS event
+                   JOIN cards AS started ON started.key=event.key
+                   WHERE started.repo=root.repo AND started.pr_number=root.pr_number
+                     AND started.head_sha=root.head_sha AND started.kind='review'
+                     AND event.type='operator_start')""",
+        (now, card["id"], cutoff),
+    )
+    if result.rowcount != 1:
         return False
-    review = c.execute(
-        """SELECT created_at FROM cards
-           WHERE repo=? AND pr_number=? AND head_sha=?
-             AND kind='review' AND status='triage'
-           ORDER BY created_at DESC LIMIT 1""",
-        (card["repo"], card["pr_number"], card["head_sha"]),
-    ).fetchone()
-    started_at = review["created_at"] if review else card["created_at"]
-    if now - started_at < days * 86400:
-        return False
-    db.set_status(c, card["id"], "archived")
     db.log_event(c, "root_monitoring_expired", card["key"],
                  {"days": days, "head": card["head_sha"]})
     return True
