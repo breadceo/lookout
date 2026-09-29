@@ -48,8 +48,8 @@ def expire_manual_review_root(c, card, now=None, days=MANUAL_ROOT_MONITOR_DAYS):
     return True
 
 
-def process_root(c, card):
-    info = ghclient.pr_view(card["repo"], card["pr_number"])
+def process_root(c, card, info=None):
+    info = info or ghclient.pr_view(card["repo"], card["pr_number"])
     if info.get("state") != "OPEN":
         feedback.snapshot_pr(c, card["repo"], card["pr_number"], "pr_closed", pr_info=info)
         # PR 머지/닫힘 → 그 PR의 모든 카드 archive (done 포함 — 머지됐으니 목록서 제거)

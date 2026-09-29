@@ -13,7 +13,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-from . import (approver, commenter, config, db, engines, feedback, monitor, notify,
+from . import (approver, commenter, config, db, engines, feedback, ghclient, monitor, notify,
                poller, reviewer, router, verifier, worktree)
 
 CFG = config.CFG
@@ -167,12 +167,35 @@ def _drain(statuses, fn, label, max_waves=30, kind=None):
 def _monitor_roots():
     with db.connect() as c:
         roots = db.cards_in(c, ["monitoring"], kind="root")
+    survivors = []
     for card in roots:
         try:
             with db.connect() as c:
                 if monitor.expire_manual_review_root(c, card):
                     continue
-                monitor.process_root(c, card)
+            survivors.append(card)
+        except Exception:  # noqa: BLE001
+            with db.connect() as c:
+                db.log_event(c, "stage_error", card["key"], {"stage": "monitor_root"})
+    if not survivors:
+        return
+    try:
+        states = ghclient.pr_states([(card["repo"], card["pr_number"])
+                                     for card in survivors])
+    except Exception:  # noqa: BLE001
+        with db.connect() as c:
+            db.log_event(c, "stage_error", detail={"stage": "monitor_roots_batch"})
+        return
+    for card in survivors:
+        info = states.get((card["repo"], card["pr_number"]))
+        if info is None:
+            with db.connect() as c:
+                db.log_event(c, "stage_error", card["key"],
+                             {"stage": "monitor_root_missing"})
+            continue
+        try:
+            with db.connect() as c:
+                monitor.process_root(c, card, info=info)
         except Exception:  # noqa: BLE001
             with db.connect() as c:
                 db.log_event(c, "stage_error", card["key"], {"stage": "monitor_root"})
