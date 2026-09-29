@@ -52,6 +52,53 @@ class PerformanceOptimizationTest(unittest.TestCase):
         self.assertEqual(rows[("owner/repo", 2)]["state"], "MERGED")
         self.assertEqual(rows[("other/project", 9)]["state"], "CLOSED")
 
+    def test_monitor_github_state_batches_roots_and_triage_once(self):
+        c = sqlite3.connect(":memory:")
+        c.row_factory = sqlite3.Row
+        c.executescript(db.SCHEMA)
+        now = db.now()
+        c.execute(
+            """INSERT INTO cards(key,kind,repo,pr_number,head_sha,status,created_at,updated_at)
+               VALUES ('root','root','owner/repo',1,'h1','monitoring',?,?)""", (now, now)
+        )
+        c.execute(
+            """INSERT INTO cards(key,kind,repo,pr_number,head_sha,status,created_at,updated_at)
+               VALUES ('review','review','owner/repo',2,'h2','triage',?,?)""", (now, now)
+        )
+        old_connect = tick.db.connect
+        old_states = tick.ghclient.pr_states
+        old_expire = monitor.expire_manual_review_root
+        old_root = monitor.process_root
+        old_triage = monitor.process_triage
+        calls, processed = [], []
+
+        @contextmanager
+        def connect():
+            yield c
+
+        try:
+            tick.db.connect = connect
+            tick.ghclient.pr_states = lambda refs: (
+                calls.append(list(refs))
+                or {("owner/repo", n): {"number": n, "state": "OPEN", "headRefOid": f"h{n}"}
+                    for n in (1, 2)}
+            )
+            monitor.expire_manual_review_root = lambda *_args: False
+            monitor.process_root = lambda _c, card, info=None: processed.append(("root", info["number"]))
+            monitor.process_triage = lambda _c, card, info=None: processed.append(("triage", info["number"]))
+            tick._monitor_github_state()
+        finally:
+            tick.db.connect = old_connect
+            tick.ghclient.pr_states = old_states
+            monitor.expire_manual_review_root = old_expire
+            monitor.process_root = old_root
+            monitor.process_triage = old_triage
+            c.close()
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(set(calls[0]), {("owner/repo", 1), ("owner/repo", 2)})
+        self.assertEqual(processed, [("root", 1), ("triage", 2)])
+
     def test_monitor_roots_uses_one_batch_and_passes_fresh_info(self):
         c = sqlite3.connect(":memory:")
         c.row_factory = sqlite3.Row
